@@ -11,14 +11,16 @@ use defmt::*;
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
-use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0};
-use embassy_rp::pio::{InterruptHandler, Pio};
+use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0, USB};
+use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio};
+use embassy_rp::usb::{Driver, InterruptHandler as USBInterruptHandler};
 use embassy_time::{Duration, Timer};
 use static_cell::make_static;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
-    PIO0_IRQ_0 => InterruptHandler<PIO0>;
+    USBCTRL_IRQ => USBInterruptHandler<USB>;
+    PIO0_IRQ_0 => PioInterruptHandler<PIO0>;
 });
 
 #[embassy_executor::task]
@@ -28,9 +30,20 @@ async fn wifi_task(
     runner.run().await
 }
 
+#[embassy_executor::task]
+async fn usb_logger_task(driver: Driver<'static, USB>) {
+    embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
+
+    // Init USB logger
+    let driver = Driver::new(p.USB, Irqs);
+    spawner.spawn(usb_logger_task(driver)).unwrap();
+
+    // Init wifi
     let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
     let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
 
@@ -50,11 +63,11 @@ async fn main(spawner: Spawner) {
 
     let delay = Duration::from_secs(1);
     loop {
-        info!("led on!");
+        log::info!("led on!");
         control.gpio_set(0, true).await;
         Timer::after(delay).await;
 
-        info!("led off!");
+        log::info!("led off!");
         control.gpio_set(0, false).await;
         Timer::after(delay).await;
     }
